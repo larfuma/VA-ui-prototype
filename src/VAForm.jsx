@@ -10,54 +10,95 @@ import {
 } from "@mui/material";
 
 /** 
- * 1) UNIT references
+ * Right eye => at0013 (SNOMED-CT::726680007)
+ * Left eye => at0012 (SNOMED-CT::726675003)
  */
-const UNIT_CODES = {
-  meterSnellen: { code: "M-Snellen", label: "Meter Snellen Ratio" },
-  feetSnellen: { code: "Ft-Snellen", label: "Feet Snellen Ratio" },
-  logMAR: { code: "logMAR", label: "logMAR" },
-  decimal: { code: "Decimal", label: "Decimal" },
-  lettersRead: { code: "Letters", label: "Number of Letters Read" },
-  nFont: { code: "NFont", label: "N Notation" },
-  jaeger: { code: "Jaeger", label: "Jaeger" }
-};
-
-/**
- * 2) Coded dictionary => SNOMED codes + logMAR approximation
- */
-const CODED_RESULTS_DICT = {
-  "HM - Hand movement": {
-    snomed: "260295004",
-    hasLogmar: true,
-    logmar: 2.3
+const EYE_CODES = {
+  right: {
+    code: "at0013",
+    text: "Right eye",
+    snomed: "726680007"
   },
-  "CF - Count fingers": {
-    snomed: "260295003",
-    hasLogmar: true,
-    logmar: 1.9
-  },
-  "LP - Light Perception": {
-    snomed: "260296003",
-    hasLogmar: false
-  },
-  "LPAP - Light Perception, accurate Projection": {
-    snomed: "260297007",
-    hasLogmar: false
-  },
-  "LPIP - Light Perception, inaccurate Projection": {
-    snomed: "260298002",
-    hasLogmar: false
-  },
-  "NLP - No Light Perception": {
-    snomed: "63063006",
-    hasLogmar: false
+  left: {
+    code: "at0012",
+    text: "Left eye",
+    snomed: "726675003"
   }
 };
 
-const CODED_RESULTS_ARRAY = Object.keys(CODED_RESULTS_DICT);
-
 /**
- * 3) Conversion tables for N-Font → logMAR, Jaeger → logMAR
+ * The official mapping from the archetype’s local text to 
+ * the correct code system + code from term_binding
+ */
+const officialCodedMap = {
+  "HM - Hand movement": {
+    archetypeNode: "at0152",
+    codeSystem: "SNOMED-CT",
+    codeString: "260295004",
+    approximateLogMAR: 2.3
+  },
+  "CF - Count fingers": {
+    archetypeNode: "at0153",
+    codeSystem: "LOINC",
+    codeString: "LA24679-5",
+    approximateLogMAR: 1.9
+  },
+  "PL - Perceives Light": {
+    archetypeNode: "at0154",
+    codeSystem: "SNOMED-CT",
+    codeString: "260296003"
+    // no approximate logMAR
+  },
+  "PLAP - Perceives Light, accurate Projection": {
+    archetypeNode: "at0155",
+    codeSystem: "SNOMED-CT",
+    codeString: "260297007"
+  },
+  "PLIP - Perceives Light, inaccurate Projection": {
+    archetypeNode: "at0156",
+    codeSystem: "SNOMED-CT",
+    codeString: "260298002"
+  },
+  "NPL - No Light Perception": {
+    archetypeNode: "at0161",
+    codeSystem: "SNOMED-CT",
+    codeString: "63063006"
+  },
+  "CSM - Central Steady Maintained Fixation": {
+    archetypeNode: "at0157",
+    codeSystem: "LOINC",
+    codeString: "LA25490-6"
+  },
+  "CUM - Central Unsteady Maintained Fixation": {
+    archetypeNode: "at0158",
+    codeSystem: "LOINC",
+    codeString: "LA25491-4"
+  },
+  "FF - Fix and Follow": {
+    archetypeNode: "at0159",
+    codeSystem: "LOINC",
+    codeString: "LA25492-2"
+  },
+  "BFL - Blinks for Light": {
+    archetypeNode: "at0160",
+    codeSystem: "LOINC",
+    codeString: "LA25493-0"
+  },
+  "OtO - Objection to Occlusion": {
+    archetypeNode: "at0260",
+    codeSystem: "local",
+    codeString: "at0260"
+  },
+  "NI - No Improvement": {
+    archetypeNode: "at0280",
+    codeSystem: "local",
+    codeString: "at0280"
+  }
+};
+const OFFICIAL_CODED_ENTRIES = Object.keys(officialCodedMap);
+
+/** 
+ * N-Font => logMAR
  */
 const N_FONT_MAP = {
   4: 0.07,
@@ -72,6 +113,9 @@ const N_FONT_MAP = {
   30: 0.52
 };
 
+/** 
+ * Jaeger => logMAR
+ */
 const JAEGER_MAP = {
   1: 0.0,
   2: 0.1,
@@ -89,9 +133,6 @@ const JAEGER_MAP = {
   14: 1.0
 };
 
-/**
- * numeric helpers
- */
 function decimalToLogmar(dec) {
   if (dec <= 0) return NaN;
   return -Math.log10(dec);
@@ -102,6 +143,8 @@ function logmarToDecimal(lm) {
 
 /**
  * parseResultInput(inputRaw):
+ *   returns an object {valid, error?, type, ...} 
+ *   with logic to handle coded strings, fraction, decimals, etc.
  */
 function parseResultInput(inputRaw) {
   if (!inputRaw) {
@@ -109,73 +152,54 @@ function parseResultInput(inputRaw) {
   }
   let input = inputRaw.trim();
 
-  // A) EXACT coded match (CF, HM, etc.)
-  const codedEntry = CODED_RESULTS_ARRAY.find(
+  // (A) EXACT coded
+  const codedEntry = OFFICIAL_CODED_ENTRIES.find(
     (k) => k.toLowerCase() === input.toLowerCase()
   );
   if (codedEntry) {
-    const entryObj = CODED_RESULTS_DICT[codedEntry];
-    if (entryObj.hasLogmar) {
-      return {
-        valid: true,
-        type: "coded",
-        label: codedEntry,
-        snomed: entryObj.snomed,
-        codedLogmar: entryObj.logmar,
-        codedDecimal: logmarToDecimal(entryObj.logmar)
-      };
-    }
-    // no logMAR
     return {
       valid: true,
-      type: "coded",
+      type: "coded-official",
       label: codedEntry,
-      snomed: entryObj.snomed,
-      codedLogmar: null
+      codeSystem: officialCodedMap[codedEntry].codeSystem,
+      codeString: officialCodedMap[codedEntry].codeString,
+      approximateLogMAR: officialCodedMap[codedEntry].approximateLogMAR || null
     };
   }
 
-  // B) N font size => "N8", "n12", etc.
+  // (B) N font => e.g. "N8"
   if (/^[Nn]\d+$/.test(input)) {
     const num = parseInt(input.slice(1), 10);
     const mappedLogmar = N_FONT_MAP[num];
     if (mappedLogmar == null) {
-      return {
-        valid: false,
-        error: "Are you sure this value exists?"
-      };
+      return { valid: false, error: `Unrecognized N-size: N${num}` };
     }
     return {
       valid: true,
       type: "nFont",
       Nvalue: num,
       logmar: mappedLogmar,
-      decimalVA: logmarToDecimal(mappedLogmar),
-      unit: UNIT_CODES.nFont
+      decimalVA: logmarToDecimal(mappedLogmar)
     };
   }
 
-  // C) Jaeger => e.g. "3J", "12J"
-  if (/^\d+J$/.test(input)) {
-    const num = parseInt(input.slice(0, -1), 10);
+  // (C) Jaeger => "3J"
+  if (/^\d+J$/i.test(input)) {
+    const num = parseInt(input, 10);
     const mappedLogmar = JAEGER_MAP[num];
     if (mappedLogmar == null) {
-      return {
-        valid: false,
-        error: "Are you sure this value exists?"
-      };
+      return { valid: false, error: `Unrecognized Jaeger: J${num}` };
     }
     return {
       valid: true,
       type: "jaeger",
       Jvalue: num,
       logmar: mappedLogmar,
-      decimalVA: logmarToDecimal(mappedLogmar),
-      unit: UNIT_CODES.jaeger
+      decimalVA: logmarToDecimal(mappedLogmar)
     };
   }
 
-  // Possibly forced distance suffix for fractions:
+  // Possibly forced distance suffix: "m" or "ft"
   let forcedDistance = null;
   if (input.toLowerCase().endsWith("m")) {
     forcedDistance = "meters";
@@ -185,7 +209,7 @@ function parseResultInput(inputRaw) {
     input = input.slice(0, -2).trim();
   }
 
-  // D) fraction => x/y
+  // (D) fraction => x/y
   const slashCount = (input.match(/\//g) || []).length;
   if (slashCount === 1) {
     const [numStr, denStr] = input.split("/");
@@ -197,26 +221,22 @@ function parseResultInput(inputRaw) {
     if (isNaN(numerator) || isNaN(denominator)) {
       return { valid: false, error: "Fraction not numeric" };
     }
-
-    // Decide meter vs feet
-    let finalUnit = UNIT_CODES.meterSnellen;
-    if (forcedDistance === "feet") finalUnit = UNIT_CODES.feetSnellen;
-    else if (forcedDistance === "meters") finalUnit = UNIT_CODES.meterSnellen;
+    let finalUnit = "Meter Snellen Ratio"; // default
+    if (forcedDistance === "feet") finalUnit = "Feet Snellen Ratio";
+    else if (forcedDistance === "meters") finalUnit = "Meter Snellen Ratio";
     else {
-      // if numerator=20 => feet, if 6 => meter, else meter
-      if (numerator === 20) finalUnit = UNIT_CODES.feetSnellen;
-      else if (numerator === 6) finalUnit = UNIT_CODES.meterSnellen;
+      // if numerator=20 => feet, if 6 => meters
+      if (numerator === 20) finalUnit = "Feet Snellen Ratio";
+      else if (numerator === 6) finalUnit = "Meter Snellen Ratio";
     }
-
     const decimalVA = numerator / denominator;
     const logMARval = decimalToLogmar(decimalVA);
-
     return {
       valid: true,
       type: "fraction",
       numerator,
       denominator,
-      unit: finalUnit,
+      snellenUnit: finalUnit,
       decimalVA,
       logMARval
     };
@@ -224,19 +244,18 @@ function parseResultInput(inputRaw) {
     return { valid: false, error: "Too many slashes" };
   }
 
-  // E) numeric
-  // Check if ends with "dec"
+  // (E) numeric => check if ends with "dec"
   let endsWithDec = false;
+  let baseInput = input;
   if (input.toLowerCase().endsWith("dec")) {
     endsWithDec = true;
-    input = input.slice(0, -3).trim();
+    baseInput = input.slice(0, -3).trim();
   }
 
-  // Must be digits, dot, comma
-  if (!/^[0-9.,]+$/.test(input)) {
+  if (!/^[0-9.,]+$/.test(baseInput)) {
     return { valid: false, error: "Invalid characters for numeric input" };
   }
-  const numericVal = parseFloat(input.replace(",", "."));
+  const numericVal = parseFloat(baseInput.replace(",", "."));
   if (isNaN(numericVal)) {
     return { valid: false, error: "Cannot parse numeric" };
   }
@@ -246,250 +265,404 @@ function parseResultInput(inputRaw) {
     return {
       valid: true,
       type: "lettersRead",
-      letters: numericVal,
-      unit: UNIT_CODES.lettersRead
+      letters: numericVal
     };
   }
 
   if (endsWithDec) {
-    // interpret as decimal
-    const logmar = decimalToLogmar(numericVal);
+    const logmarVal = decimalToLogmar(numericVal);
     return {
       valid: true,
       type: "decimal",
       decimalValue: numericVal,
-      logMARval: logmar,
-      unit: UNIT_CODES.decimal
+      logMARval: logmarVal
     };
   }
 
-  // else => default is logMAR
+  // else => interpret as direct logMAR
   const decVal = logmarToDecimal(numericVal);
   return {
     valid: true,
     type: "logMARDirect",
     logmar: numericVal,
-    decimalVA: decVal,
-    unit: UNIT_CODES.logMAR
+    decimalVA: decVal
   };
+}
+
+// Additional sample suggestions so the user sees them
+const RELEVANT_CODED_DISPLAYS = OFFICIAL_CODED_ENTRIES.concat([
+  "6/6", "20/40ft", "0.3dec", "5", "0.18", "N8", "2J"
+]);
+
+function renderInterpretation(parseResult) {
+  if (!parseResult) return null;
+  if (!parseResult.valid) {
+    return (
+      <Typography color="error" variant="body2">
+        {parseResult.error}
+      </Typography>
+    );
+  }
+  switch (parseResult.type) {
+    case "coded-official":
+      return (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          Coded: {parseResult.label} (<em>{parseResult.codeSystem} {parseResult.codeString}</em>)
+          {parseResult.approximateLogMAR != null && (
+            <> ~ logMAR {parseResult.approximateLogMAR.toFixed(2)}</>
+          )}
+        </Typography>
+      );
+    case "nFont":
+      return (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          N-Font: N{parseResult.Nvalue}, logMAR={parseResult.logmar.toFixed(2)}
+        </Typography>
+      );
+    case "jaeger":
+      return (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          Jaeger: {parseResult.Jvalue}, logMAR={parseResult.logmar.toFixed(2)}
+        </Typography>
+      );
+    case "fraction":
+      return (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          Fraction: {parseResult.numerator}/{parseResult.denominator} → {parseResult.snellenUnit}, 
+          logMAR={isNaN(parseResult.logMARval) ? "N/A" : parseResult.logMARval.toFixed(2)}
+        </Typography>
+      );
+    case "lettersRead":
+      return (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          Letters read: {parseResult.letters}
+        </Typography>
+      );
+    case "decimal":
+      return (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          Decimal VA: {parseResult.decimalValue}, logMAR=
+          {isNaN(parseResult.logMARval) ? "N/A" : parseResult.logMARval.toFixed(2)}
+        </Typography>
+      );
+    case "logMARDirect":
+      return (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          logMAR: {parseResult.logmar.toFixed(2)}, decimal≈{" "}
+          {parseResult.decimalVA.toFixed(3)}
+        </Typography>
+      );
+    default:
+      return null;
+  }
+}
+
+/**
+ * fillEyeEvent(index, parseResult, eye, comp):
+ * populates minimal composition data for that eye
+ */
+function fillEyeEvent(index, parseResult, eye, comp, rawValue) {
+  if (!parseResult?.valid) return;
+
+  const prefix = `test_va_2/visual_acuity_test_result/any_event:${index}`;
+
+  // Eye code
+  const eyeData = EYE_CODES[eye];
+  comp[`${prefix}/eye_s_examined|value`] = eyeData.text;
+  comp[`${prefix}/eye_s_examined|terminology`] = "local";
+  comp[`${prefix}/eye_s_examined|code`] = eyeData.code;
+
+  // The actual result stored under:
+  const resultValKey = `${prefix}/result_details/result/coded_text_value|value`;
+  const resultTermKey = `${prefix}/result_details/result/coded_text_value|terminology`;
+  const resultCodeKey = `${prefix}/result_details/result/coded_text_value|code`;
+
+  // default unit => logMAR = at0165
+  let unitCode = "at0165";
+  let unitValue = "logMAR";
+  let derivedLogmar = null;
+
+  switch (parseResult.type) {
+    case "coded-official":
+      comp[resultValKey] = parseResult.label;
+      comp[resultTermKey] = parseResult.codeSystem;
+      comp[resultCodeKey] = parseResult.codeString;
+      derivedLogmar = parseResult.approximateLogMAR;
+      // keep default "logMAR" if we have approximate. else no numeric 
+      break;
+    case "fraction": {
+      comp[resultValKey] = `${parseResult.numerator}/${parseResult.denominator}`;
+      comp[resultTermKey] = "local";
+      comp[resultCodeKey] = "at0152"; // fallback local code
+      // pick unit code
+      if (parseResult.snellenUnit === "Meter Snellen Ratio") {
+        unitCode = "at0171";
+        unitValue = "Meter Snellen Ratio";
+      } else {
+        unitCode = "at0172";
+        unitValue = "Feet Snellen Ratio";
+      }
+      derivedLogmar = parseResult.logMARval;
+      break;
+    }
+    case "decimal": {
+      comp[resultValKey] = parseResult.decimalValue.toString();
+      comp[resultTermKey] = "local";
+      comp[resultCodeKey] = "at0152";
+      unitCode = "at0168"; // Decimal
+      unitValue = "Decimal";
+      derivedLogmar = parseResult.logMARval;
+      break;
+    }
+    case "lettersRead": {
+      comp[resultValKey] = `${parseResult.letters} letters read`;
+      comp[resultTermKey] = "local";
+      comp[resultCodeKey] = "at0152";
+      unitCode = "at0167"; // Number of Optotypes
+      unitValue = "Number of Optotypes Identified";
+      break;
+    }
+    case "logMARDirect": {
+      comp[resultValKey] = parseResult.logmar.toString();
+      comp[resultTermKey] = "local";
+      comp[resultCodeKey] = "at0152";
+      unitCode = "at0165"; // logMAR
+      unitValue = "logMAR";
+      derivedLogmar = parseResult.logmar;
+      break;
+    }
+    case "nFont": {
+      comp[resultValKey] = `N${parseResult.Nvalue}`;
+      comp[resultTermKey] = "local";
+      comp[resultCodeKey] = "at0152";
+      unitCode = "at0281"; // N Font Size
+      unitValue = "N Font Size";
+      derivedLogmar = parseResult.logmar;
+      break;
+    }
+    case "jaeger": {
+      comp[resultValKey] = `${parseResult.Jvalue}J`;
+      comp[resultTermKey] = "local";
+      comp[resultCodeKey] = "at0152";
+      unitCode = "at0170"; // Jaeger J
+      unitValue = "Jaeger J";
+      derivedLogmar = parseResult.logmar;
+      break;
+    }
+    default:
+      // fallback
+      comp[resultValKey] = rawValue;
+      comp[resultTermKey] = "local";
+      comp[resultCodeKey] = "at0152";
+      break;
+  }
+
+  // Store the Unit of result
+  comp[`${prefix}/result_details/unit_of_result|terminology`] = "local";
+  comp[`${prefix}/result_details/unit_of_result|code`] = unitCode;
+  comp[`${prefix}/result_details/unit_of_result|value`] = unitValue;
+
+  // Derived
+  if (derivedLogmar != null && !isNaN(derivedLogmar)) {
+    comp[
+      `${prefix}/result_details/derived_result/derived_result/coded_text_value|value`
+    ] = derivedLogmar.toFixed(2);
+    comp[
+      `${prefix}/result_details/derived_result/derived_result/coded_text_value|terminology`
+    ] = "local";
+    comp[
+      `${prefix}/result_details/derived_result/derived_result/coded_text_value|code`
+    ] = "at0174"; // "HM - Hand movement" is a placeholder code for DV_CODED_TEXT 
+                  // Typically you'd use a DV_QUANTITY if truly numeric
+    comp[
+      `${prefix}/result_details/derived_result/unit_of_derived_result|terminology`
+    ] = "local";
+    comp[
+      `${prefix}/result_details/derived_result/unit_of_derived_result|code`
+    ] = "at0185"; // logMAR
+    comp[
+      `${prefix}/result_details/derived_result/unit_of_derived_result|value`
+    ] = "logMAR";
+  }
 }
 
 export default function VAResultUnitForm() {
   const { control, handleSubmit, watch, setValue } = useForm({
-    defaultValues: { resultValue: "" }
+    defaultValues: {
+      rightEyeValue: "",
+      leftEyeValue: ""
+    }
   });
-  const [parsed, setParsed] = useState(null);
-  const userInput = watch("resultValue");
 
-  // Re-parse on input change
+  const [rightParse, setRightParse] = useState(null);
+  const [leftParse, setLeftParse] = useState(null);
+
+  const rightVal = watch("rightEyeValue");
+  const leftVal = watch("leftEyeValue");
+
   useEffect(() => {
-    const res = parseResultInput(userInput);
-    setParsed(res);
-  }, [userInput]);
+    setRightParse(parseResultInput(rightVal));
+  }, [rightVal]);
+  useEffect(() => {
+    setLeftParse(parseResultInput(leftVal));
+  }, [leftVal]);
 
-  // Build suggestions if user typed letters
-  const getSuggestions = () => {
-    if (!userInput) return [];
-    const hasLetters = /[a-zA-Z]/.test(userInput);
-    if (hasLetters) {
-      const lower = userInput.toLowerCase();
-      return CODED_RESULTS_ARRAY.filter((item) =>
-        item.toLowerCase().includes(lower)
-      );
-    }
-    return [];
-  };
-  const suggestions = getSuggestions();
+  const [finalComposition, setFinalComposition] = useState(null);
 
-  const onSubmit = (data) => {
-    if (!parsed || !parsed.valid) {
-      alert(`Invalid: ${parsed?.error || "Unknown error"}`);
-      return;
-    }
-    console.log("Raw data:", data);
-    console.log("Parsed result:", parsed);
-    alert("Check console!");
-  };
+  function getSuggestions(value) {
+    if (!value) return [];
+    const lower = value.toLowerCase();
+    return RELEVANT_CODED_DISPLAYS.filter((entry) =>
+      entry.toLowerCase().includes(lower)
+    );
+  }
+  const rightSuggestions = getSuggestions(rightVal);
+  const leftSuggestions = getSuggestions(leftVal);
 
-  // On <Enter>, if exactly 1 suggestion => auto-select
-  const handleEnterIfSingleSuggestion = (evt) => {
-    if (evt.key === "Enter" && suggestions.length === 1) {
+  function handleEnterIfSingleSuggestion(evt, suggestionsArr, setField) {
+    if (evt.key === "Enter" && suggestionsArr.length === 1) {
       evt.preventDefault();
-      setValue("resultValue", suggestions[0]);
+      setField(suggestionsArr[0]);
     }
-  };
+  }
 
-  // Renders final interpretation below
-  const renderInterpretation = () => {
-    if (!parsed) return null;
-    if (!parsed.valid) {
-      return <Typography color="error">Invalid: {parsed.error}</Typography>;
-    }
-    switch (parsed.type) {
-      case "coded":
-        return (
-          <Box>
-            <Typography>
-              <strong>Coded:</strong> {parsed.label}
-            </Typography>
-            <Typography>SNOMED: {parsed.snomed}</Typography>
-            {parsed.codedLogmar != null && (
-              <Typography>
-                logMAR≈ {parsed.codedLogmar.toFixed(2)}, decimal≈{" "}
-                {parsed.codedDecimal?.toFixed(4)}
-              </Typography>
-            )}
-          </Box>
-        );
+  const onSubmit = () => {
+    // minimal composition object
+    const composition = {
+      "test_va_2/category|value": "event",
+      "test_va_2/category|terminology": "openehr",
+      "test_va_2/category|code": "433"
+    };
 
-      case "nFont":
-        return (
-          <Box>
-            <Typography>
-              <strong>N Font Size:</strong> N{parsed.Nvalue}
-            </Typography>
-            <Typography>
-              <strong>logMAR:</strong> {parsed.logmar.toFixed(2)}
-            </Typography>
-            <Typography>
-              <strong>Decimal:</strong> {parsed.decimalVA.toFixed(3)}
-            </Typography>
-          </Box>
-        );
+    // fill right => any_event:0
+    fillEyeEvent(0, rightParse, "right", composition, rightVal);
+    // fill left => any_event:1
+    fillEyeEvent(1, leftParse, "left", composition, leftVal);
 
-      case "jaeger":
-        return (
-          <Box>
-            <Typography>
-              <strong>Jaeger:</strong> {parsed.Jvalue}J
-            </Typography>
-            <Typography>
-              <strong>logMAR:</strong> {parsed.logmar.toFixed(2)}
-            </Typography>
-            <Typography>
-              <strong>Decimal:</strong> {parsed.decimalVA.toFixed(3)}
-            </Typography>
-          </Box>
-        );
-
-      case "fraction":
-        return (
-          <Box>
-            <Typography>
-              <strong>Fraction:</strong> {parsed.numerator}/{parsed.denominator}
-            </Typography>
-            <Typography>
-              <strong>Unit:</strong> {parsed.unit.label} ({parsed.unit.code})
-            </Typography>
-            <Typography>
-              Decimal VA={parsed.decimalVA.toFixed(3)}, logMAR=
-              {isNaN(parsed.logMARval)
-                ? "N/A"
-                : parsed.logMARval.toFixed(2)}
-            </Typography>
-          </Box>
-        );
-
-      case "lettersRead":
-        return (
-          <Box>
-            <Typography>
-              <strong>Letters Read:</strong> {parsed.letters}
-            </Typography>
-          </Box>
-        );
-
-      case "decimal":
-        return (
-          <Box>
-            <Typography>
-              <strong>Decimal:</strong> {parsed.decimalValue}
-            </Typography>
-            <Typography>
-              <strong>logMAR:</strong>{" "}
-              {isNaN(parsed.logMARval)
-                ? "N/A"
-                : parsed.logMARval.toFixed(2)}
-            </Typography>
-          </Box>
-        );
-
-      case "logMARDirect":
-        return (
-          <Box>
-            <Typography>
-              <strong>logMAR:</strong> {parsed.logmar}
-            </Typography>
-            <Typography>
-              <strong>Decimal:</strong>{" "}
-              {isNaN(parsed.decimalVA)
-                ? "N/A"
-                : parsed.decimalVA.toFixed(4)}
-            </Typography>
-          </Box>
-        );
-
-      default:
-        return null;
-    }
+    setFinalComposition(composition);
+    console.log("Final Composition:", composition);
   };
 
   return (
     <Paper sx={{ p: 3, m: 2 }}>
-      <Typography variant="h5" gutterBottom>
-        Visual Acuity Entry (with logMAR Conversions)
+      <Typography variant="h3" gutterBottom>
+        OpenEHR VA Template UI - very early prototype of unit recognition
       </Typography>
 
+      {/* Examples for each notation */}
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="body1" sx={{ fontWeight: 600 }}>
+          Examples by unit/type:
+        </Typography>
+        <ul style={{ marginTop: 0 }}>
+          <li><strong>logMAR (default) </strong>: "0.18"</li>
+          <li><strong>Snellen Fraction (meter)</strong>: "6/6"</li>
+          <li><strong>Snellen Fraction (feet)</strong>: "20/40ft"</li>
+          <li><strong>Decimal Notation</strong>: "0.5dec"</li>
+          <li><strong>Letters Read (assumed for integers above 2)</strong>: "5"</li>
+          <li><strong>Jaeger</strong>: "3J"</li>
+          <li><strong>N-Font</strong>: "N8"</li>
+          <li><strong>Coded entries - just type and choose</strong>: "HM - Hand movement", "CF - Count fingers", "PL - Perceives Light", etc.</li>
+        </ul>
+      </Box>
+
       <form onSubmit={handleSubmit(onSubmit)}>
-        <Box sx={{ mb: 2 }}>
-          <Controller
-            name="resultValue"
-            control={control}
-            render={({ field: { onChange, onBlur, value } }) => {
-              const isInvalid = parsed && !parsed.valid && value.length > 0;
-              return (
-                <Autocomplete
-                  freeSolo
-                  options={suggestions}
-                  inputValue={value}
-                  onKeyDown={handleEnterIfSingleSuggestion}
-                  onInputChange={(_e, newVal, reason) => {
-                    if (reason === "selectOption") {
-                      onChange(newVal);
-                    } else {
-                      onChange(newVal);
-                    }
-                  }}
-                  renderOption={(props, option) => {
-                    const cinfo = CODED_RESULTS_DICT[option];
-                    return (
-                      <li {...props} key={option}>
-                        {option} — SNOMED: {cinfo.snomed}
-                      </li>
-                    );
-                  }}
-                  renderInput={(params) => (
-                    <TextField
-                      {...params}
-                      onBlur={onBlur}
-                      label="Result"
-                      placeholder='Examples: "6/6", "N8", "3J", "20/40ft", "4" (letters), "1.2dec", "HM - Hand movement"'
-                      error={isInvalid}
-                      helperText={isInvalid ? parsed?.error : ""}
+        <Box sx={{ display: "flex", gap: 3, mb: 2 }}>
+          {/* RIGHT Eye */}
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6">Right Eye</Typography>
+            <Controller
+              name="rightEyeValue"
+              control={control}
+              render={({ field: { onChange, onBlur, value } }) => {
+                const isInvalid = rightParse && !rightParse.valid && value.length > 0;
+                return (
+                  <>
+                    <Autocomplete
+                      freeSolo
+                      options={rightSuggestions}
+                      inputValue={value}
+                      onKeyDown={(evt) =>
+                        handleEnterIfSingleSuggestion(evt, rightSuggestions, onChange)
+                      }
+                      onInputChange={(_evt, newVal, reason) => {
+                        if (reason === "selectOption") onChange(newVal);
+                        else onChange(newVal);
+                      }}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          onBlur={onBlur}
+                          label="Right Eye VA"
+                          placeholder='e.g. 6/6, 0.3dec, HM - Hand movement'
+                          error={isInvalid}
+                          helperText={isInvalid ? rightParse?.error : ""}
+                        />
+                      )}
                     />
-                  )}
-                />
-              );
-            }}
-          />
+                    {/* Live interpretation */}
+                    <Box sx={{ mt: 1 }}>{renderInterpretation(rightParse)}</Box>
+                  </>
+                );
+              }}
+            />
+          </Box>
+
+          {/* LEFT Eye */}
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="h6">Left Eye</Typography>
+            <Controller
+              name="leftEyeValue"
+              control={control}
+              render={({ field: { onChange, onBlur, value } }) => {
+                const isInvalid = leftParse && !leftParse.valid && value.length > 0;
+                return (
+                  <>
+                    <Autocomplete
+                      freeSolo
+                      options={leftSuggestions}
+                      inputValue={value}
+                      onKeyDown={(evt) =>
+                        handleEnterIfSingleSuggestion(evt, leftSuggestions, onChange)
+                      }
+                      onInputChange={(_evt, newVal, reason) => {
+                        if (reason === "selectOption") onChange(newVal);
+                        else onChange(newVal);
+                      }}
+                      renderInput={(params) => (
+                        <TextField
+                          {...params}
+                          onBlur={onBlur}
+                          label="Left Eye VA"
+                          placeholder='e.g. 20/40ft, CF - Count fingers, N8'
+                          error={isInvalid}
+                          helperText={isInvalid ? leftParse?.error : ""}
+                        />
+                      )}
+                    />
+                    {/* Live interpretation */}
+                    <Box sx={{ mt: 1 }}>{renderInterpretation(leftParse)}</Box>
+                  </>
+                );
+              }}
+            />
+          </Box>
         </Box>
 
         <Button variant="contained" type="submit">
-          Save
+          Build Composition
         </Button>
       </form>
 
-      <Box sx={{ mt: 3 }}>{renderInterpretation()}</Box>
+      {/* Display final composition if available */}
+      {finalComposition && (
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="h5">Resulting Composition</Typography>
+          <pre style={{ background: "#f9f9f9", padding: 10 }}>
+            {JSON.stringify(finalComposition, null, 2)}
+          </pre>
+        </Box>
+      )}
     </Paper>
   );
 }
