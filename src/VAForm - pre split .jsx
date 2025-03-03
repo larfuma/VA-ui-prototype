@@ -179,10 +179,15 @@ function parseResultInput(inputRaw) {
   // (B) N font => e.g. "N8"
   if (/^[Nn]\d+$/.test(input)) {
     const num = parseInt(input.slice(1), 10);
+    const mappedLogmar = N_FONT_MAP[num];
+    if (mappedLogmar == null) {
+      return { valid: false, error: `Unrecognized N-size: N${num}` };
+    }
     return {
       valid: true,
       type: "nFont",
       Nvalue: num,
+      logmar: mappedLogmar,
       Distance: {magnitude: 35, unit: "cm", explicit: false} // Distance was NOT explicitly entered (yet)
     };
   }
@@ -190,10 +195,15 @@ function parseResultInput(inputRaw) {
   // (C) Jaeger => "3J"
   if (/^\d+J$/i.test(input)) {
     const num = parseInt(input, 10);
+    const mappedLogmar = JAEGER_MAP[num];
+    if (mappedLogmar == null) {
+      return { valid: false, error: `Unrecognized Jaeger: J${num}` };
+    }
     return {
       valid: true,
       type: "jaeger",
       Jvalue: num,
+      logmar: mappedLogmar,
       Distance: {magnitude: 35, unit: "cm", explicit: false} // Distance was NOT explicitly entered (yet)
     };
   }
@@ -248,6 +258,7 @@ if (slashCount === 1) {
   }
 
   const decimalVA = numerator / denominator;
+  const logMARval = decimalToLogmar(decimalVA);
 
   return {
     valid: true,
@@ -255,6 +266,7 @@ if (slashCount === 1) {
     numerator,
     denominator,
     decimalVA,
+    logMARval,
     Distance: finalDistance
   };
 } else if (slashCount > 1) {
@@ -295,15 +307,18 @@ if (slashCount === 1) {
       valid: true,
       type: "decimal",
       decimalValue: numericVal,
+      logMARval: logmarVal,
       Distance: {magnitude: 6, unit: "m", explicit: false}
     };
   }
 
   // else => interpret as direct logMAR
+  const decVal = logmarToDecimal(numericVal);
   return {
     valid: true,
     type: "logMARDirect",
     logmar: numericVal,
+    decimalVA: decVal,
     Distance: {magnitude: 6, unit: "m", explicit: false}
   };
 }
@@ -325,9 +340,9 @@ function renderInterpretation(parseResult) {
 
   let additionalText = "";
   if (parseResult.Distance && !parseResult.Distance.explicit) {
-    additionalText = `(${parseResult.Distance.magnitude}${parseResult.Distance.unit} default distance)`;
+    additionalText = `(at ${parseResult.Distance.magnitude}${parseResult.Distance.unit} implied distance)`;
   } else if (parseResult.Distance && parseResult.Distance.explicit){
-     additionalText = `(${parseResult.Distance.magnitude}${parseResult.Distance.unit} explicit distance)`;
+     additionalText = `(at ${parseResult.Distance.magnitude}${parseResult.Distance.unit})`;
   }
 
   switch (parseResult.type) {
@@ -335,33 +350,36 @@ function renderInterpretation(parseResult) {
       return (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
           Coded: {parseResult.label} (<em>{parseResult.codeSystem} {parseResult.codeString}</em>)
+          {parseResult.approximateLogMAR != null && (
+            <> ~ logMAR {parseResult.approximateLogMAR.toFixed(2)}</>
+          )}
           {additionalText}
         </Typography>
       );
     case "nFont":
       return (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          N-Font: N{parseResult.Nvalue}, {additionalText}
+          N-Font: N{parseResult.Nvalue}, logMAR={parseResult.logmar.toFixed(2)} {additionalText}
         </Typography>
       );
     case "jaeger":
       return (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          Jaeger: {parseResult.Jvalue}, {additionalText}
+          Jaeger: {parseResult.Jvalue}, logMAR={parseResult.logmar.toFixed(2)} {additionalText}
         </Typography>
       );
     case "Meter Snellen Ratio":
       return (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          Meter Snellen Ratio: {parseResult.numerator}/{parseResult.denominator}{parseResult.snellenUnit},
-         {additionalText}
+          Meter Snellen Ratio: {parseResult.numerator}/{parseResult.denominator} → {parseResult.snellenUnit},
+          logMAR={isNaN(parseResult.logMARval) ? "N/A" : parseResult.logMARval.toFixed(2)} {additionalText}
         </Typography>
       );
     case "Feet Snellen Ratio":
       return (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          Feet Snellen Ratio: {parseResult.numerator}/{parseResult.denominator}{parseResult.snellenUnit},
-           {additionalText}
+          Feet Snellen Ratio: {parseResult.numerator}/{parseResult.denominator} → {parseResult.snellenUnit},
+          logMAR={isNaN(parseResult.logMARval) ? "N/A" : parseResult.logMARval.toFixed(2)} {additionalText}
         </Typography>
       );
     case "lettersRead":
@@ -373,13 +391,15 @@ function renderInterpretation(parseResult) {
     case "decimal":
       return (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          Decimal VA: {parseResult.decimalValue}, {additionalText}
+          Decimal VA: {parseResult.decimalValue}, logMAR=
+          {isNaN(parseResult.logMARval) ? "N/A" : parseResult.logMARval.toFixed(2)} {additionalText}
         </Typography>
       );
     case "logMARDirect":
       return (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          logMAR: {parseResult.logmar}, {additionalText}
+          logMAR: {parseResult.logmar.toFixed(2)}, decimal≈{" "}
+          {parseResult.decimalVA.toFixed(3)} {additionalText}
         </Typography>
       );
     default:
@@ -395,8 +415,7 @@ function renderInterpretation(parseResult) {
 function fillEyeEvent(index, parseResult, eye, comp, rawValue) {
   if (!parseResult?.valid) return;
 
-  // Dynamically generate the prefix based on the index
-  const prefix = `va_test_template/visual_acuity_test_result:${index}`;
+  const prefix = `va_test_template/visual_acuity_test_result/any_event:${index}`;
 
   // Eye code
   const eyeData = EYE_CODES[eye];
@@ -404,50 +423,68 @@ function fillEyeEvent(index, parseResult, eye, comp, rawValue) {
   comp[`${prefix}/eye_s_examined|terminology`] = "local";
   comp[`${prefix}/eye_s_examined|code`] = eyeData.code;
 
-  // Testing distance
-  comp[`${prefix}/testing_distance/quantity_value|unit`] = parseResult.Distance.unit;
-  comp[`${prefix}/testing_distance/quantity_value|magnitude`] = parseResult.Distance.magnitude;
+  comp[`va_test_template/visual_acuity_test_result/testing_distance/quantity_value|unit`] = parseResult.Distance.unit;
+  comp[`va_test_template/visual_acuity_test_result/testing_distance/quantity_value|magnitude`] = parseResult.Distance.magnitude;
 
-  // Result details
+
+
+  let derivedLogmar = null;
+  let numericValue = null; // store numeric value here if found
   switch (parseResult.type) {
     case "coded-official":
       comp[`${prefix}/result_details/qualitative_measures|value`] = parseResult.label;
       comp[`${prefix}/result_details/qualitative_measures|terminology`] = parseResult.codeSystem;
       comp[`${prefix}/result_details/qualitative_measures|code`] = parseResult.codeString;
+      derivedLogmar = parseResult.approximateLogMAR;
       break;
     case "Meter Snellen Ratio":
       comp[`${prefix}/result_details/meter_snellen_ratio|numerator`] = parseResult.numerator;
       comp[`${prefix}/result_details/meter_snellen_ratio|denominator`] = parseResult.denominator;
       comp[`${prefix}/result_details/meter_snellen_ratio|type`] = 0;
       comp[`${prefix}/result_details/meter_snellen_ratio`] = parseResult.numerator / parseResult.denominator;
+      derivedLogmar = parseResult.logMARval;
       break;
     case "Feet Snellen Ratio":
       comp[`${prefix}/result_details/feet_snellen_ratio|numerator`] = parseResult.numerator;
       comp[`${prefix}/result_details/feet_snellen_ratio|denominator`] = parseResult.denominator;
       comp[`${prefix}/result_details/feet_snellen_ratio|type`] = 0;
       comp[`${prefix}/result_details/feet_snellen_ratio`] = parseResult.numerator / parseResult.denominator;
+      derivedLogmar = parseResult.logMARval;
       break;
     case "decimal":
       comp[`${prefix}/result_details/decimal_notation|magnitude`] = parseResult.decimalValue;
+      numericValue = parseResult.decimalValue
+      derivedLogmar = parseResult.logMARval;
       break;
     case "lettersRead":
-      comp[`${prefix}/result_details/number_of_recognized_optotypes|magnitude`] = parseResult.letters;
+        comp[`${prefix}/result_details/number_of_recognized_optotypes|magnitude`] = parseResult.letters;
       break;
     case "logMARDirect":
       comp[`${prefix}/result_details/logmar|magnitude`] = parseResult.logmar;
+      numericValue = parseResult.logmar;
+      derivedLogmar = parseResult.logmar;
       break;
     case "nFont":
       comp[`${prefix}/result_details/n_font_size_notation|magnitude`] = parseResult.Nvalue;
+      derivedLogmar = parseResult.logmar;
       break;
     case "jaeger":
       comp[`${prefix}/result_details/jaeger_font_size_notation|magnitude`] = parseResult.Jvalue;
+      derivedLogmar = parseResult.logmar;
       break;
     default:
-      comp[`${prefix}/result_details/qualitative_measures|value`] = rawValue;
+        comp[`${prefix}/result_details/qualitative_measures|value`] = rawValue;
       break;
   }
-}
+  
+  //Derived value (always logMar in this demonstra):
+  if (derivedLogmar != null && !isNaN(derivedLogmar)) {
+      comp[`${prefix}/result_details/derived_result/logmar|magnitude`] = derivedLogmar;
 
+    }
+
+
+}
 
 function parseDistanceInput(inputRaw) {
   if (!inputRaw) {
@@ -532,18 +569,46 @@ export default function VAResultUnitForm() {
   }, [rightVal]);
 
   useEffect(() => {
-    const newParse = parseResultInput(leftVal);
-    setLeftParse(newParse);
+      const newParse = parseResultInput(leftVal);
+      setLeftParse(newParse);
   }, [leftVal]);
 
-  useEffect(() => {
-    setRightDistanceParse(parseDistanceInput(rightDistance));
-  }, [rightDistance]);
+   useEffect(() => {
+      setRightDistanceParse(parseDistanceInput(rightDistance));
+    }, [rightDistance]);
 
-  useEffect(() => {
-    setLeftDistanceParse(parseDistanceInput(leftDistance));
-  }, [leftDistance]);
-
+    useEffect(() => {
+        setLeftDistanceParse(parseDistanceInput(leftDistance));
+    }, [leftDistance]);
+    
+    useEffect(() => {
+      if (rightParse?.valid &&  rightParse?.Distance) {
+          let newLogMar = rightParse.logmar;
+          let newDistance = rightParse.Distance;
+          if(rightDistanceParse?.valid && rightDistanceParse.explicit){
+              newDistance = rightDistanceParse;
+              if(rightParse.type !== "coded-official" && rightParse.type!=="lettersRead"){
+                const initialDistance = rightParse.Distance;
+                newLogMar = calculateLogMARAtDistance(rightParse.logmar, initialDistance, newDistance);
+              }
+          }
+         setRightParse({...rightParse, logmar: newLogMar, Distance: {...newDistance, explicit: newDistance.explicit}});
+      }
+    }, [rightDistanceParse, rightParse]);
+     useEffect(() => {
+      if (leftParse?.valid && leftParse?.Distance) {
+         let newLogMar = leftParse.logmar;
+         let newDistance = leftParse.Distance;
+        if(leftDistanceParse?.valid && leftDistanceParse.explicit){
+              newDistance = leftDistanceParse;
+              if(leftParse.type !== "coded-official" && leftParse.type!=="lettersRead"){
+                 const initialDistance = leftParse.Distance;
+                  newLogMar = calculateLogMARAtDistance(leftParse.logmar, initialDistance, newDistance);
+              }
+        }
+         setLeftParse({...leftParse, logmar: newLogMar, Distance: {...newDistance, explicit: newDistance.explicit}});
+      }
+    }, [leftDistanceParse, leftParse]);
 
   const [finalComposition, setFinalComposition] = useState(null);
 
@@ -565,32 +630,26 @@ export default function VAResultUnitForm() {
   }
 
   const onSubmit = () => {
-    // Minimal composition object
+    // minimal composition object
     const composition = {
+      "va_test_template/category|value": "event",
       "va_test_template/category|terminology": "openehr",
       "va_test_template/category|code": "433",
-      "va_test_template/category|value": "event",
-      "va_test_template/context/start_time": new Date().toISOString(), // Example timestamp
-      "va_test_template/context/setting|value": "online_PoC",
-      "va_test_template/context/_end_time": new Date().toISOString(), // Example timestamp
-      "va_test_template/context/_health_care_facility|name": "DOE, John",
     };
-  
-    // Fill right eye => visual_acuity_test_result:0
-    if (rightParse?.valid) {
+
+    // fill right => any_event:0
+    if (rightParse?.valid && rightDistanceParse?.valid) {
       fillEyeEvent(0, rightParse, "right", composition, rightVal);
     }
-  
-    // Fill left eye => visual_acuity_test_result:1
-    if (leftParse?.valid) {
+    // fill left => any_event:1
+    if (leftParse?.valid && leftDistanceParse?.valid) {
       fillEyeEvent(1, leftParse, "left", composition, leftVal);
     }
-  
+
     setFinalComposition(composition);
     console.log("Final Composition:", composition);
   };
 
-  
   return (
     <Paper sx={{ p: 3, m: 2 }}>
       <Typography variant="h3" gutterBottom>
@@ -654,8 +713,6 @@ export default function VAResultUnitForm() {
                 );
               }}
             />
-
-          
           </Box>
           {/* Right Eye Distance */}
           <Box sx={{ flex: 1 }}>
@@ -664,29 +721,19 @@ export default function VAResultUnitForm() {
               name="rightEyeDistance"
               control={control}
               render={({ field: { onChange, onBlur, value } }) => {
-                // Disable the field if the parseResult distance is explicit
-                const isDisabled = rightParse?.Distance?.explicit && !rightParse.Distance.inherited || false;
-
-                // Clear the field if the parseResult distance is explicit
-                if (isDisabled && value) {
-                  onChange(""); // Clear the field
-                }
-
-                const isInvalid = rightDistanceParse && !rightDistanceParse.valid && value.length < 0;
-                return (
+                  const isInvalid = rightDistanceParse && !rightDistanceParse.valid && value.length > 0;
+                return(
                   <TextField
-                    onBlur={onBlur}
-                    label="Distance"
-                    placeholder='e.g. 22mm, 35cm'
-                    value={value}
-                    onChange={onChange}
-                    error={isInvalid}
-                    helperText={isInvalid ? rightDistanceParse?.error : ""}
-                    disabled={isDisabled} // Disable the field
-                  />
-                );
+                  onBlur={onBlur}
+                  label="Distance"
+                  placeholder='e.g. 22mm, 35cm'
+                  value={value}
+                  onChange={onChange}
+                  error={isInvalid}
+                  helperText={isInvalid ? rightDistanceParse?.error : ""}
+                  />)
               }}
-            />
+              />
           </Box>
 
           {/* LEFT Eye */}
@@ -736,16 +783,8 @@ export default function VAResultUnitForm() {
               name="leftEyeDistance"
               control={control}
               render={({ field: { onChange, onBlur, value } }) => {
-                // Disable the field if the parseResult distance is explicit without being inherited from distance entry field
-                const isDisabled = leftParse?.Distance?.explicit && !leftParse.Distance.inherited || false;
-
-                // Clear the field if the parseResult distance is explicit
-                if (isDisabled && value) {
-                  onChange(""); // Clear the field
-                }
-
                 const isInvalid = leftDistanceParse && !leftDistanceParse.valid && value.length > 0;
-                return (
+                return(
                   <TextField
                     onBlur={onBlur}
                     label="Distance"
@@ -754,9 +793,7 @@ export default function VAResultUnitForm() {
                     onChange={onChange}
                     error={isInvalid}
                     helperText={isInvalid ? leftDistanceParse?.error : ""}
-                    disabled={isDisabled} // Disable the field
-                  />
-                );
+                  />)
               }}
             />
           </Box>

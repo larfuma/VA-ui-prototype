@@ -1,7 +1,18 @@
-// src/App.jsx
-import React from "react";
-import VAForm from "./VAForm";
+import React from 'react';
+import { CssBaseline, Container, Typography, Box } from '@mui/material';
+import VAForm from './components/form/VAForm';
 
-export default function App() {
-  return <VAForm />;
+function App() {
+  return (
+    <>
+      <CssBaseline />
+      <Container>
+        <Box sx={{ my: 4 }}>
+          <VAForm />
+        </Box>
+      </Container>
+    </>
+  );
 }
+
+export default App;
